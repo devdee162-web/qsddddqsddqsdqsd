@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -13,6 +15,40 @@ from pathlib import Path
 from version import VERSION
 
 USER_AGENT = "TOOL-OAP-Updater"
+CACHE_NAME = ".tool_oap_cache.json"
+DEFAULT_GITHUB_REPO = "devdee162-web/qsddddqsddqsdqsd"
+
+
+def cache_path(app_dir: Path) -> Path:
+    return app_dir / CACHE_NAME
+
+
+def load_cache(app_dir: Path) -> dict:
+    path = cache_path(app_dir)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_cache(app_dir: Path, data: dict) -> None:
+    cache_path(app_dir).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def should_check_updates(app_dir: Path, interval_hours: int) -> bool:
+    cache = load_cache(app_dir)
+    last_check = float(cache.get("last_check_ts", 0))
+    return (time.time() - last_check) >= max(1, interval_hours) * 3600
+
+
+def already_has_version(app_dir: Path, remote_tag: str) -> bool:
+    cache = load_cache(app_dir)
+    return cache.get("installed_version") == remote_tag
 
 
 def parse_version(raw: str) -> tuple[int, ...]:
@@ -31,7 +67,44 @@ def is_newer(remote: str, local: str) -> bool:
 
 
 def github_repo_configured(github_repo: str) -> bool:
-    return bool(github_repo and "/" in github_repo and " " not in github_repo)
+    repo = github_repo.strip().strip('"').strip("'")
+    return bool(repo and "/" in repo and " " not in repo)
+
+
+def read_env_value(app_dir: Path, key: str) -> str:
+    env_file = app_dir / ".env"
+    if not env_file.exists():
+        return ""
+    for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        if name.strip() == key:
+            return value.strip().strip('"').strip("'")
+    return ""
+
+
+def resolve_github_repo(github_repo: str, app_dir: Path) -> str:
+    for candidate in (
+        github_repo,
+        read_env_value(app_dir, "GITHUB_REPO"),
+        os.getenv("GITHUB_REPO", ""),
+    ):
+        repo = str(candidate or "").strip().strip('"').strip("'")
+        if github_repo_configured(repo):
+            return repo
+
+    try:
+        from dotenv import dotenv_values
+
+        repo = str(dotenv_values(app_dir / ".env").get("GITHUB_REPO", "")).strip()
+        if github_repo_configured(repo):
+            return repo
+    except Exception:
+        pass
+
+    return DEFAULT_GITHUB_REPO
 
 
 def fetch_latest_release(github_repo: str) -> dict | None:
@@ -118,13 +191,11 @@ del /f /q "%~f0"
     sys.exit(0)
 
 
-def check_update_info(github_repo: str) -> tuple[bool, str, dict | None]:
-    if not github_repo_configured(github_repo):
-        return False, "GITHUB_REPO non configure dans .env", None
-
-    release = fetch_latest_release(github_repo)
+def check_update_info(github_repo: str, app_dir: Path | None = None) -> tuple[bool, str, dict | None]:
+    repo = resolve_github_repo(github_repo, app_dir or Path.cwd())
+    release = fetch_latest_release(repo)
     if not release:
-        return False, "Aucune release GitHub trouvee.", None
+        return False, f"Aucune release GitHub trouvee pour {repo}.", None
 
     tag = release.get("tag_name", "?")
     if is_newer(tag, VERSION):
@@ -139,8 +210,13 @@ def install_update(
     release: dict | None = None,
     frozen: bool = False,
 ) -> bool:
-    release = release or fetch_latest_release(github_repo)
+    repo = resolve_github_repo(github_repo, app_dir)
+    release = release or fetch_latest_release(repo)
     if not release:
+        return False
+
+    remote_tag = release.get("tag_name", "?")
+    if already_has_version(app_dir, remote_tag):
         return False
 
     if frozen:
@@ -149,6 +225,11 @@ def install_update(
             return False
         new_exe = app_dir / "TOOL_OAP.exe.new"
         download_file(asset["browser_download_url"], new_exe, "Telechargement EXE")
+        cache = load_cache(app_dir)
+        cache["installed_version"] = remote_tag
+        cache["last_check_ts"] = time.time()
+        cache["last_remote_tag"] = remote_tag
+        save_cache(app_dir, cache)
         apply_exe_update(app_dir, new_exe)
         return True
 
@@ -181,6 +262,7 @@ def install_update(
         "export_discord.py",
         "version.py",
         "updater.py",
+        "auto_setup.py",
         "requirements.txt",
         "lancer_export.bat",
         "build_exe.bat",
@@ -192,13 +274,87 @@ def install_update(
 
     shutil.rmtree(extract_dir, ignore_errors=True)
     archive.unlink(missing_ok=True)
+
+    cache = load_cache(app_dir)
+    cache["installed_version"] = remote_tag
+    cache["last_check_ts"] = time.time()
+    cache["last_remote_tag"] = remote_tag
+    save_cache(app_dir, cache)
     return True
+
+
+def perform_update_check(
+    *,
+    github_repo: str,
+    app_dir: Path,
+    frozen: bool,
+    auto_install: bool,
+    interval_hours: int,
+    force: bool,
+    silent_if_uptodate: bool,
+    animate_info,
+    animate_success,
+    animate_warning,
+    safe_input=None,
+) -> None:
+    repo = resolve_github_repo(github_repo, app_dir)
+
+    if not force and not should_check_updates(app_dir, interval_hours):
+        return
+
+    try:
+        available, message, release = check_update_info(repo, app_dir)
+    except Exception as exc:
+        if not silent_if_uptodate:
+            animate_info(f"Mise a jour ignoree: {exc}")
+        return
+
+    remote_tag = release.get("tag_name", "?") if release else "?"
+    cache = load_cache(app_dir)
+    cache["last_check_ts"] = time.time()
+    cache["last_remote_tag"] = remote_tag
+    cache["update_available"] = available
+    save_cache(app_dir, cache)
+
+    if not available:
+        if not silent_if_uptodate:
+            animate_info(message)
+        return
+
+    if already_has_version(app_dir, remote_tag):
+        return
+
+    if auto_install:
+        animate_warning(f"{message} - installation auto...")
+        try:
+            if install_update(repo, app_dir, release, frozen=frozen):
+                if not frozen:
+                    animate_success("Sources mises a jour. Relance le tool.")
+            else:
+                animate_warning("Mise a jour auto impossible (EXE absent sur GitHub).")
+        except Exception as exc:
+            animate_warning(f"Mise a jour auto echouee: {exc}")
+        return
+
+    animate_warning(message)
+    if safe_input is None:
+        return
+
+    confirm = safe_input("Installer la mise a jour ? (o/n): ")
+    if confirm and confirm.lower() in {"o", "oui", "y", "yes"}:
+        try:
+            if install_update(repo, app_dir, release, frozen=frozen):
+                if not frozen:
+                    animate_success("Sources mises a jour. Relance le tool.")
+        except Exception as exc:
+            animate_warning(f"Erreur: {exc}")
 
 
 def run_update_menu(
     github_repo: str,
     app_dir: Path,
     frozen: bool,
+    auto_mode: bool,
     animate_success,
     animate_error,
     animate_info,
@@ -207,35 +363,19 @@ def run_update_menu(
     safe_input,
 ) -> None:
     animate_transition("Verification GitHub", 0.4)
-    try:
-        available, message, release = check_update_info(github_repo)
-    except Exception as exc:
-        animate_error(f"Erreur GitHub: {exc}")
-        return
-
-    if not available:
-        animate_info(message)
-        return
-
-    animate_warning(message)
-    if release:
-        notes = (release.get("body") or "").strip()
-        if notes:
-            print(notes[:500])
-
-    confirm = safe_input("Installer la mise a jour ? (o/n): ")
-    if not confirm or confirm.lower() not in {"o", "oui", "y", "yes"}:
-        animate_info("Mise a jour annulee.")
-        return
-
-    try:
-        if install_update(github_repo, app_dir, release, frozen=frozen):
-            if not frozen:
-                animate_success("Sources mises a jour. Relance le tool.")
-        else:
-            animate_error("Echec de la mise a jour.")
-    except Exception as exc:
-        animate_error(f"Erreur: {exc}")
+    perform_update_check(
+        github_repo=github_repo,
+        app_dir=app_dir,
+        frozen=frozen,
+        auto_install=auto_mode,
+        interval_hours=24,
+        force=True,
+        silent_if_uptodate=False,
+        animate_info=animate_info,
+        animate_success=animate_success,
+        animate_warning=animate_warning,
+        safe_input=None if auto_mode else safe_input,
+    )
 
 
 def auto_check_on_start(
@@ -243,25 +383,24 @@ def auto_check_on_start(
     app_dir: Path,
     frozen: bool,
     enabled: bool,
+    auto_install: bool,
+    interval_hours: int,
     animate_info,
+    animate_success,
     animate_warning,
-    safe_input,
 ) -> None:
-    if not enabled or not github_repo_configured(github_repo):
+    if not enabled:
         return
 
-    try:
-        available, message, release = check_update_info(github_repo)
-    except Exception:
-        return
-
-    if not available:
-        return
-
-    animate_warning(message)
-    confirm = safe_input("Mettre a jour maintenant ? (o/n): ")
-    if confirm and confirm.lower() in {"o", "oui", "y", "yes"}:
-        try:
-            install_update(github_repo, app_dir, release, frozen=frozen)
-        except Exception:
-            pass
+    perform_update_check(
+        github_repo=github_repo,
+        app_dir=app_dir,
+        frozen=frozen,
+        auto_install=auto_install,
+        interval_hours=interval_hours,
+        force=False,
+        silent_if_uptodate=True,
+        animate_info=animate_info,
+        animate_success=animate_success,
+        animate_warning=animate_warning,
+    )

@@ -8,6 +8,7 @@ import asyncio
 import csv
 import getpass
 import hashlib
+import hashlib
 import html
 import json
 import os
@@ -30,7 +31,8 @@ import discord
 from colorama import Fore, Style, init
 from dotenv import load_dotenv
 
-from updater import auto_check_on_start, run_update_menu
+from auto_setup import prepare_environment, run_startup_automation
+from updater import auto_check_on_start, resolve_github_repo, run_update_menu
 from version import VERSION
 
 
@@ -42,7 +44,8 @@ def get_app_dir() -> Path:
 
 APP_DIR = get_app_dir()
 os.chdir(APP_DIR)
-load_dotenv(APP_DIR / ".env")
+prepare_environment(APP_DIR)
+load_dotenv(APP_DIR / ".env", override=True)
 init(autoreset=True)
 
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
@@ -74,15 +77,30 @@ SYNC_VM_USER = os.getenv("SYNC_VM_USER", "").strip()
 SYNC_VM_PASS = os.getenv("SYNC_VM_PASS", "").strip()
 SYNC_VM_SHARE = os.getenv("SYNC_VM_SHARE", "tool_oap").strip()
 SYNC_VM_UNC = os.getenv("SYNC_VM_UNC", "").strip()
-GITHUB_REPO = os.getenv(
-    "GITHUB_REPO", "devdee162-web/qsddddqsddqsdqsd"
-).strip()
+GITHUB_REPO = resolve_github_repo(
+    os.getenv("GITHUB_REPO", "devdee162-web/qsddddqsddqsdqsd"),
+    APP_DIR,
+)
 AUTO_UPDATE_ON_START = os.getenv("AUTO_UPDATE_ON_START", "true").strip().lower() in {
     "1",
     "true",
     "oui",
     "yes",
 }
+AUTO_MODE = os.getenv("AUTO_MODE", "true").strip().lower() in {
+    "1",
+    "true",
+    "oui",
+    "yes",
+}
+AUTO_SYNC_ON_START = os.getenv("AUTO_SYNC_ON_START", "false").strip().lower() in {
+    "1",
+    "true",
+    "oui",
+    "yes",
+}
+UPDATE_CHECK_HOURS = max(1, int(os.getenv("UPDATE_CHECK_HOURS", "24") or "24"))
+SYNC_CACHE_FILE = APP_DIR / ".tool_oap_sync.json"
 BOT_PERMISSIONS = 68624  # voir salons + lire historique + envoyer + gerer salons
 
 _vm_share_connected = False
@@ -1379,7 +1397,38 @@ def ensure_vm_connected() -> bool:
     return False
 
 
-def sync_path_to_vm(local_path: Path, quiet: bool = False) -> bool:
+def load_sync_cache() -> dict:
+    if not SYNC_CACHE_FILE.exists():
+        return {}
+    try:
+        return json.loads(SYNC_CACHE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_sync_cache(cache: dict) -> None:
+    SYNC_CACHE_FILE.write_text(
+        json.dumps(cache, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def path_fingerprint(local_path: Path) -> str:
+    if local_path.is_file():
+        stat = local_path.stat()
+        return f"f:{stat.st_mtime_ns}:{stat.st_size}"
+
+    parts: list[str] = []
+    for file_path in sorted(local_path.rglob("*")):
+        if file_path.is_file():
+            stat = file_path.stat()
+            rel = file_path.relative_to(local_path)
+            parts.append(f"{rel}:{stat.st_mtime_ns}:{stat.st_size}")
+    digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:16]
+    return f"d:{digest}:{len(parts)}"
+
+
+def sync_path_to_vm(local_path: Path, quiet: bool = False, force: bool = False) -> bool:
     if not vm_sync_configured():
         return False
 
@@ -1394,6 +1443,12 @@ def sync_path_to_vm(local_path: Path, quiet: bool = False) -> bool:
         relative = local_path.relative_to(Path.cwd().resolve())
     except ValueError:
         relative = Path(local_path.parent.name) / local_path.name
+
+    cache_key = str(relative).replace("\\", "/")
+    fingerprint = path_fingerprint(local_path)
+    cache = load_sync_cache()
+    if not force and cache.get(cache_key) == fingerprint:
+        return True
 
     remote = Path(get_vm_unc()) / relative
     remote.parent.mkdir(parents=True, exist_ok=True)
@@ -1410,17 +1465,22 @@ def sync_path_to_vm(local_path: Path, quiet: bool = False) -> bool:
             animate_error(f"Sync serveur distant echouee: {exc}")
         return False
 
+    cache[cache_key] = fingerprint
+    save_sync_cache(cache)
+
     if not quiet:
         animate_success(f"Donnees sur le {vm_label()}: {relative}")
     return True
 
 
-def sync_all_to_vm() -> None:
+def sync_all_to_vm(quiet: bool = False) -> None:
     if not vm_sync_configured():
-        animate_error("Sync serveur distant desactivee. Configure SYNC_VM_* dans .env")
+        if not quiet:
+            animate_error("Sync serveur distant desactivee. Configure SYNC_VM_* dans .env")
         return
 
-    animate_transition("Synchronisation vers serveur distant", 0.5)
+    if not quiet:
+        animate_transition("Synchronisation vers serveur distant", 0.5)
     if not ensure_vm_connected():
         return
 
@@ -1429,12 +1489,13 @@ def sync_all_to_vm() -> None:
         if not base_dir.exists():
             continue
         for item in base_dir.iterdir():
-            if sync_path_to_vm(item, quiet=True):
+            if sync_path_to_vm(item, quiet=True, force=not quiet):
                 copied += 1
 
     if copied:
-        animate_success(f"{copied} element(s) synchronise(s) sur le {vm_label()}")
-    else:
+        if not quiet:
+            animate_success(f"{copied} element(s) synchronise(s) sur le {vm_label()}")
+    elif not quiet:
         animate_warning("Rien a synchroniser ou echec de copie.")
 
 
@@ -1746,6 +1807,7 @@ def tool_menu(user: User) -> bool:
                 GITHUB_REPO,
                 APP_DIR,
                 getattr(sys, "frozen", False),
+                AUTO_MODE,
                 animate_success,
                 animate_error,
                 animate_info,
@@ -2064,14 +2126,19 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     animate_banner()
 
-    auto_check_on_start(
-        GITHUB_REPO,
-        APP_DIR,
-        getattr(sys, "frozen", False),
-        AUTO_UPDATE_ON_START,
-        animate_info,
-        animate_warning,
-        safe_input,
+    run_startup_automation(
+        github_repo=GITHUB_REPO,
+        app_dir=APP_DIR,
+        frozen=getattr(sys, "frozen", False),
+        auto_update=AUTO_UPDATE_ON_START,
+        auto_mode=AUTO_MODE,
+        auto_sync=AUTO_SYNC_ON_START and vm_sync_configured(),
+        update_check_hours=UPDATE_CHECK_HOURS,
+        sync_callback=sync_all_to_vm,
+        update_callback=auto_check_on_start,
+        animate_info=animate_info,
+        animate_success=animate_success,
+        animate_warning=animate_warning,
     )
 
     while True:

@@ -23,6 +23,8 @@ dist/TOOL_OAP.exe
 dist/TOOL_OAP.exe.new
 dist/*.txt
 dist/_update_*
+.tool_oap_cache.json
+.tool_oap_sync.json
 *.spec.bak
 
 # OS / IDE

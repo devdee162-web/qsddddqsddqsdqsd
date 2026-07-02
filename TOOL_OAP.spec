@@ -12,6 +12,7 @@ hiddenimports = [
     'discord',
     'updater',
     'version',
+    'auto_setup',
 ]
 
 for pkg in ('discord', 'colorama', 'dotenv'):
