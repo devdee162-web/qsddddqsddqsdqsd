@@ -1,0 +1,33 @@
+# Secrets et config locale
+.env
+dist/.env
+*.old
+
+# Donnees utilisateur
+dossiers/
+export_discord/
+accounts.json
+dist/accounts.json
+tool_oap_donnees_*.zip
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Build PyInstaller
+build/
+dist/TOOL_OAP.exe
+dist/TOOL_OAP.exe.new
+dist/*.txt
+dist/_update_*
+*.spec.bak
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

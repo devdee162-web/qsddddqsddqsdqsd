@@ -1,0 +1,46 @@
+name: Build auto sur main
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release-latest:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer dependances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pillow
+
+      - name: Creer icone ICO
+        run: |
+          python -c "from PIL import Image; img=Image.open('assets/icon.png'); img.save('assets/icon.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+
+      - name: Compiler EXE
+        run: pyinstaller --noconfirm --clean TOOL_OAP.spec
+
+      - name: Mettre a jour release latest
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          name: Derniere version (auto)
+          body: Build automatique depuis main - ${{ github.sha }}
+          artifacts: dist/TOOL_OAP.exe
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
+          prerelease: true
