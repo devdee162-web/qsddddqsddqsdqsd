@@ -3,6 +3,9 @@ chcp 65001 >nul
 cd /d "%~dp0"
 
 echo === API Discord TOOL OAP (VM) ===
+echo.
+echo Si les clients affichent "VM indisponible", lance open_discord_api_firewall.bat en admin.
+echo.
 
 if not exist "discord_api.env" (
     echo discord_api.env introuvable, creation automatique...

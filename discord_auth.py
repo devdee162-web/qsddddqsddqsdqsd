@@ -12,6 +12,7 @@ from discord_api_client import (
     discord_api_configured,
     fetch_discord_status,
     fetch_discord_token,
+    last_api_error,
     resolve_discord_api_url,
 )
 
@@ -63,12 +64,20 @@ def mask_token(token: str) -> str:
 def discord_token_status(data_dir: Path) -> str:
     if discord_api_configured():
         status = fetch_discord_status()
-        if status and status.get("configured") and status.get("bot_username"):
-            return f"VM connecte ({status['bot_username']})"
         if status and status.get("configured"):
+            source = status.get("source", "")
+            name = status.get("bot_username") or ""
+            if name:
+                suffix = " (partage)" if source == "smb" else ""
+                return f"VM connecte ({name}){suffix}"
+            if source == "smb":
+                return "VM connecte (partage)"
             return "VM connecte"
         api_url = resolve_discord_api_url()
         if api_url:
+            detail = last_api_error()
+            if detail:
+                return f"VM indisponible ({detail})"
             return "VM indisponible"
         return "API VM non configuree"
 
@@ -119,6 +128,11 @@ def test_discord_api() -> bool:
     status = fetch_discord_status(force=True)
     if not status:
         print("Echec: API VM injoignable.")
+        detail = last_api_error()
+        if detail:
+            print(f"Detail: {detail}")
+        print("Sur la VM: lance open_discord_api_firewall.bat en administrateur.")
+        print("Puis relance start_discord_api.bat (publie aussi sur le partage SMB).")
         return False
 
     if status.get("bot_username"):

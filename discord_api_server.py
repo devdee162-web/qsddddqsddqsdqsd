@@ -1,17 +1,17 @@
 """
-API Discord pour VM — heberge le token bot, le client TOOL OAP le recupere.
+API Discord pour VM/VPS — heberge le token bot, le client TOOL OAP le recupere.
 
-Lancer sur la VM:
-  python discord_api_server.py
-  ou: start_discord_api.bat
+Windows: start_discord_api.bat
+Linux VPS: ./start_discord_api.sh ou ./install_discord_api_linux.sh
 
-Config: discord_api.env (copie discord_api.env.example)
+Config: discord_api.env (copie discord_api.env.example ou discord_api.env.linux.example)
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -38,7 +38,13 @@ def load_server_config() -> dict[str, str]:
     values: dict[str, str] = {}
     for name in ("discord_api.env", ".env"):
         values.update(_parse_env_file(ROOT / name))
-    for key in ("DISCORD_TOKEN", "DISCORD_API_KEY", "DISCORD_API_HOST", "DISCORD_API_PORT"):
+    for key in (
+        "DISCORD_TOKEN",
+        "DISCORD_API_KEY",
+        "DISCORD_API_HOST",
+        "DISCORD_API_PORT",
+        "DISCORD_API_PUBLISH_DIR",
+    ):
         env_value = os.getenv(key, "").strip()
         if env_value:
             values[key] = env_value
@@ -85,6 +91,21 @@ class DiscordApiHandler(BaseHTTPRequestHandler):
         return bool(provided) and provided == self.api_key
 
     def do_GET(self) -> None:
+        if self.path in ("/", ""):
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "service": "tool-oap-discord-api",
+                    "endpoints": {
+                        "health": "/api/health",
+                        "status": "/api/discord/status",
+                        "token": "/api/discord/token (header X-API-Key requis)",
+                    },
+                },
+            )
+            return
+
         if self.path == "/api/health":
             self._send_json(200, {"ok": True, "service": "tool-oap-discord-api"})
             return
@@ -127,6 +148,31 @@ class DiscordApiHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "not_found"})
 
 
+def publish_share_files(config: dict[str, str], token: str, info: dict | None) -> None:
+    publish_dir = config.get("DISCORD_API_PUBLISH_DIR", "").strip()
+    if not publish_dir:
+        return
+
+    share = Path(publish_dir)
+    share.mkdir(parents=True, exist_ok=True)
+
+    env_src = ROOT / "discord_api.env"
+    if env_src.exists():
+        shutil.copy2(env_src, share / "discord_api.env")
+
+    status = {
+        "configured": bool(token),
+        "bot_id": str(info.get("id", "")) if info else "",
+        "bot_username": str(info.get("username", "")) if info else "",
+        "source": "vm",
+    }
+    (share / "discord_status.json").write_text(
+        json.dumps(status, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"Partage SMB mis a jour: {share}")
+
+
 def main() -> int:
     config = load_server_config()
     token = config.get("DISCORD_TOKEN", "").strip()
@@ -144,9 +190,11 @@ def main() -> int:
     DiscordApiHandler.token = token
     DiscordApiHandler.api_key = api_key
 
-    server = ThreadingHTTPServer((host, port), DiscordApiHandler)
     info = discord_bot_info(token)
     bot_label = info.get("username", "?") if info else "token invalide"
+    publish_share_files(config, token, info)
+
+    server = ThreadingHTTPServer((host, port), DiscordApiHandler)
     print(f"API Discord TOOL OAP — http://{host}:{port}")
     print(f"Bot: {bot_label}")
     print("Endpoints: /api/health /api/discord/status /api/discord/token")
