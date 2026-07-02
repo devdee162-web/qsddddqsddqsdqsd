@@ -19,12 +19,13 @@ __pycache__/
 
 # Build PyInstaller
 build/
-dist/TOOL_OAP.exe
-dist/TOOL_OAP.exe.new
-dist/*.txt
-dist/_update_*
+dist/
+dist/.env
+dist/accounts.json
+dist/config.example.env
 .tool_oap_cache.json
 .tool_oap_sync.json
+_embedded_secrets.py
 *.spec.bak
 
 # OS / IDE

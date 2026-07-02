@@ -8,7 +8,6 @@ import asyncio
 import csv
 import getpass
 import hashlib
-import hashlib
 import html
 import json
 import os
@@ -29,26 +28,29 @@ from pathlib import Path
 
 import discord
 from colorama import Fore, Style, init
-from dotenv import load_dotenv
 
 from auto_setup import prepare_environment, run_startup_automation
+from app_paths import get_data_dir, is_frozen
+from discord_auth import (
+    discord_token_status,
+    ensure_discord_token,
+    prompt_discord_token,
+)
 from updater import auto_check_on_start, resolve_github_repo, run_update_menu
 from version import VERSION
 
 
 def get_app_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    return get_data_dir()
 
 
-APP_DIR = get_app_dir()
-os.chdir(APP_DIR)
-prepare_environment(APP_DIR)
-load_dotenv(APP_DIR / ".env", override=True)
+INSTALL_DIR, DATA_DIR = prepare_environment()
+APP_DIR = DATA_DIR
+UPDATE_DIR = INSTALL_DIR if is_frozen() else DATA_DIR
+os.chdir(DATA_DIR)
+
 init(autoreset=True)
 
-TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 CATEGORY_ID = int(os.getenv("CATEGORY_ID", "1520602288635252886"))
 GUILD_ID = os.getenv("GUILD_ID", "").strip()
 GUILD_ID = int(GUILD_ID) if GUILD_ID else None
@@ -60,9 +62,9 @@ EXCLUDED_CHANNELS = {
     ).split(",")
     if x.strip()
 }
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "export_discord"))
-DOSSIERS_DIR = Path(os.getenv("DOSSIERS_DIR", "dossiers"))
-ACCOUNTS_FILE = Path(os.getenv("ACCOUNTS_FILE", "accounts.json"))
+OUTPUT_DIR = DATA_DIR / os.getenv("OUTPUT_DIR", "export_discord")
+DOSSIERS_DIR = DATA_DIR / os.getenv("DOSSIERS_DIR", "dossiers")
+ACCOUNTS_FILE = DATA_DIR / os.getenv("ACCOUNTS_FILE", "accounts.json")
 DOSSIER_PREFIX = os.getenv("DOSSIER_PREFIX", "📂")
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8765"))
@@ -72,15 +74,12 @@ SYNC_VM_ENABLED = os.getenv("SYNC_VM_ENABLED", "false").strip().lower() in {
     "oui",
     "yes",
 }
-SYNC_VM_HOST = os.getenv("SYNC_VM_HOST", "").strip()
-SYNC_VM_USER = os.getenv("SYNC_VM_USER", "").strip()
-SYNC_VM_PASS = os.getenv("SYNC_VM_PASS", "").strip()
+SYNC_VM_HOST = os.getenv("SYNC_VM_HOST", "192.168.1.100").strip()
+SYNC_VM_USER = os.getenv("SYNC_VM_USER", "Discord").strip()
+SYNC_VM_PASS = os.getenv("SYNC_VM_PASS", "#$6z8B@p35gZKa").strip()
 SYNC_VM_SHARE = os.getenv("SYNC_VM_SHARE", "tool_oap").strip()
 SYNC_VM_UNC = os.getenv("SYNC_VM_UNC", "").strip()
-GITHUB_REPO = resolve_github_repo(
-    os.getenv("GITHUB_REPO", "devdee162-web/qsddddqsddqsdqsd"),
-    APP_DIR,
-)
+GITHUB_REPO = resolve_github_repo(os.getenv("GITHUB_REPO", "devdee162-web/qsddddqsddqsdqsd"), DATA_DIR)
 AUTO_UPDATE_ON_START = os.getenv("AUTO_UPDATE_ON_START", "true").strip().lower() in {
     "1",
     "true",
@@ -100,7 +99,7 @@ AUTO_SYNC_ON_START = os.getenv("AUTO_SYNC_ON_START", "false").strip().lower() in
     "yes",
 }
 UPDATE_CHECK_HOURS = max(1, int(os.getenv("UPDATE_CHECK_HOURS", "24") or "24"))
-SYNC_CACHE_FILE = APP_DIR / ".tool_oap_sync.json"
+SYNC_CACHE_FILE = DATA_DIR / ".tool_oap_sync.json"
 BOT_PERMISSIONS = 68624  # voir salons + lire historique + envoyer + gerer salons
 
 _vm_share_connected = False
@@ -479,22 +478,29 @@ def list_users() -> None:
 def menu_compte(user: User) -> None:
     while True:
         animate_menu_open(f"=== MON COMPTE ({user.username}) ===")
+        print(f"  Bot Discord: {discord_token_status(DATA_DIR)}")
         print("  1. Changer mon mot de passe")
+        print("  2. Connexion bot Discord (token)")
         if user.role == "admin":
-            print("  2. Creer un compte")
-            print("  3. Supprimer un compte")
-            print("  4. Lister les comptes")
+            print("  3. Creer un compte")
+            print("  4. Supprimer un compte")
+            print("  5. Lister les comptes")
         print("  0. Retour")
 
         choice = input("\nChoix: ").strip()
 
         if choice == "1":
             change_password(user)
-        elif choice == "2" and user.role == "admin":
-            admin_create_user()
+        elif choice == "2":
+            if prompt_discord_token(DATA_DIR):
+                animate_success("Token bot Discord enregistre.")
+            else:
+                animate_info("Connexion bot Discord annulee.")
         elif choice == "3" and user.role == "admin":
-            admin_delete_user(user)
+            admin_create_user()
         elif choice == "4" and user.role == "admin":
+            admin_delete_user(user)
+        elif choice == "5" and user.role == "admin":
             list_users()
         elif choice == "0":
             break
@@ -708,9 +714,10 @@ async def creer_dossier_action(
     sync_path_to_vm(dossier_dir)
 
 
-async def run_discord_task(task, user: User | None = None) -> None:
-    if not TOKEN or TOKEN == "ton_token_bot_ici":
-        animate_error("Token manquant. Ouvre .env et ajoute DISCORD_TOKEN.")
+async def run_discord_task(task, user: User | None = None, *, _retry: bool = False) -> None:
+    token = ensure_discord_token(DATA_DIR)
+    if not token:
+        animate_error("Token bot Discord manquant. Menu 5 > Connexion bot Discord.")
         return
 
     intents = discord.Intents.default()
@@ -748,11 +755,13 @@ async def run_discord_task(task, user: User | None = None) -> None:
     )
     spinner.start()
     try:
-        await client.start(TOKEN)
+        await client.start(token)
     except discord.LoginFailure:
         stop_spinner.set()
         spinner.join()
-        animate_error("Token Discord invalide.")
+        animate_error("Token Discord invalide ou revoque.")
+        if not _retry and prompt_discord_token(DATA_DIR):
+            await run_discord_task(task, user, _retry=True)
         return
     finally:
         stop_spinner.set()
@@ -1767,6 +1776,7 @@ def menu_voir_donnees() -> None:
 def tool_menu(user: User) -> bool:
     while True:
         animate_menu_open(f"=== MENU ({user.username}) ===")
+        print(f"  Discord: {discord_token_status(DATA_DIR)}")
         print("  1. Exporter Discord")
         print("  2. Rechercher dans les dossiers")
         print("  3. Creer un dossier")
@@ -1805,9 +1815,10 @@ def tool_menu(user: User) -> bool:
         elif choice == "8":
             run_update_menu(
                 GITHUB_REPO,
-                APP_DIR,
-                getattr(sys, "frozen", False),
+                DATA_DIR,
+                is_frozen(),
                 AUTO_MODE,
+                UPDATE_DIR,
                 animate_success,
                 animate_error,
                 animate_info,
@@ -2128,12 +2139,13 @@ if __name__ == "__main__":
 
     run_startup_automation(
         github_repo=GITHUB_REPO,
-        app_dir=APP_DIR,
-        frozen=getattr(sys, "frozen", False),
+        app_dir=DATA_DIR,
+        frozen=is_frozen(),
         auto_update=AUTO_UPDATE_ON_START,
         auto_mode=AUTO_MODE,
         auto_sync=AUTO_SYNC_ON_START and vm_sync_configured(),
         update_check_hours=UPDATE_CHECK_HOURS,
+        install_dir=UPDATE_DIR,
         sync_callback=sync_all_to_vm,
         update_callback=auto_check_on_start,
         animate_info=animate_info,

@@ -72,16 +72,17 @@ def github_repo_configured(github_repo: str) -> bool:
 
 
 def read_env_value(app_dir: Path, key: str) -> str:
-    env_file = app_dir / ".env"
-    if not env_file.exists():
-        return ""
-    for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
+    for name in ("config.env", ".env"):
+        env_file = app_dir / name
+        if not env_file.exists():
             continue
-        name, value = stripped.split("=", 1)
-        if name.strip() == key:
-            return value.strip().strip('"').strip("'")
+        for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            name_key, value = stripped.split("=", 1)
+            if name_key.strip() == key:
+                return value.strip().strip('"').strip("'")
     return ""
 
 
@@ -98,6 +99,9 @@ def resolve_github_repo(github_repo: str, app_dir: Path) -> str:
     try:
         from dotenv import dotenv_values
 
+        repo = str(dotenv_values(app_dir / "config.env").get("GITHUB_REPO", "")).strip()
+        if github_repo_configured(repo):
+            return repo
         repo = str(dotenv_values(app_dir / ".env").get("GITHUB_REPO", "")).strip()
         if github_repo_configured(repo):
             return repo
@@ -209,6 +213,7 @@ def install_update(
     app_dir: Path,
     release: dict | None = None,
     frozen: bool = False,
+    install_dir: Path | None = None,
 ) -> bool:
     repo = resolve_github_repo(github_repo, app_dir)
     release = release or fetch_latest_release(repo)
@@ -219,18 +224,20 @@ def install_update(
     if already_has_version(app_dir, remote_tag):
         return False
 
+    target_dir = install_dir or app_dir
+
     if frozen:
         asset = find_exe_asset(release)
         if not asset:
             return False
-        new_exe = app_dir / "TOOL_OAP.exe.new"
+        new_exe = target_dir / "TOOL_OAP.exe.new"
         download_file(asset["browser_download_url"], new_exe, "Telechargement EXE")
         cache = load_cache(app_dir)
         cache["installed_version"] = remote_tag
         cache["last_check_ts"] = time.time()
         cache["last_remote_tag"] = remote_tag
         save_cache(app_dir, cache)
-        apply_exe_update(app_dir, new_exe)
+        apply_exe_update(target_dir, new_exe)
         return True
 
     url = release.get("zipball_url") or release.get("tarball_url")
@@ -292,6 +299,7 @@ def perform_update_check(
     interval_hours: int,
     force: bool,
     silent_if_uptodate: bool,
+    install_dir: Path | None = None,
     animate_info,
     animate_success,
     animate_warning,
@@ -327,7 +335,9 @@ def perform_update_check(
     if auto_install:
         animate_warning(f"{message} - installation auto...")
         try:
-            if install_update(repo, app_dir, release, frozen=frozen):
+            if install_update(
+                repo, app_dir, release, frozen=frozen, install_dir=install_dir
+            ):
                 if not frozen:
                     animate_success("Sources mises a jour. Relance le tool.")
             else:
@@ -343,7 +353,9 @@ def perform_update_check(
     confirm = safe_input("Installer la mise a jour ? (o/n): ")
     if confirm and confirm.lower() in {"o", "oui", "y", "yes"}:
         try:
-            if install_update(repo, app_dir, release, frozen=frozen):
+            if install_update(
+                repo, app_dir, release, frozen=frozen, install_dir=install_dir
+            ):
                 if not frozen:
                     animate_success("Sources mises a jour. Relance le tool.")
         except Exception as exc:
@@ -355,6 +367,7 @@ def run_update_menu(
     app_dir: Path,
     frozen: bool,
     auto_mode: bool,
+    install_dir: Path | None,
     animate_success,
     animate_error,
     animate_info,
@@ -371,6 +384,7 @@ def run_update_menu(
         interval_hours=24,
         force=True,
         silent_if_uptodate=False,
+        install_dir=install_dir,
         animate_info=animate_info,
         animate_success=animate_success,
         animate_warning=animate_warning,
@@ -385,6 +399,7 @@ def auto_check_on_start(
     enabled: bool,
     auto_install: bool,
     interval_hours: int,
+    install_dir: Path | None,
     animate_info,
     animate_success,
     animate_warning,
@@ -400,6 +415,7 @@ def auto_check_on_start(
         interval_hours=interval_hours,
         force=False,
         silent_if_uptodate=True,
+        install_dir=install_dir,
         animate_info=animate_info,
         animate_success=animate_success,
         animate_warning=animate_warning,
