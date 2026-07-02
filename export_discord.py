@@ -31,10 +31,12 @@ from colorama import Fore, Style, init
 
 from auto_setup import prepare_environment, run_startup_automation
 from app_paths import get_data_dir, is_frozen
+from discord_api_client import discord_api_configured
 from discord_auth import (
     discord_token_status,
     ensure_discord_token,
     prompt_discord_token,
+    test_discord_api,
 )
 from updater import auto_check_on_start, resolve_github_repo, run_update_menu
 from version import VERSION
@@ -480,11 +482,12 @@ def menu_compte(user: User) -> None:
         animate_menu_open(f"=== MON COMPTE ({user.username}) ===")
         print(f"  Bot Discord: {discord_token_status(DATA_DIR)}")
         print("  1. Changer mon mot de passe")
-        print("  2. Connexion bot Discord (token)")
+        print("  2. Connexion bot Discord (token local / secours)")
+        print("  3. Tester API Discord VM")
         if user.role == "admin":
-            print("  3. Creer un compte")
-            print("  4. Supprimer un compte")
-            print("  5. Lister les comptes")
+            print("  4. Creer un compte")
+            print("  5. Supprimer un compte")
+            print("  6. Lister les comptes")
         print("  0. Retour")
 
         choice = input("\nChoix: ").strip()
@@ -493,14 +496,19 @@ def menu_compte(user: User) -> None:
             change_password(user)
         elif choice == "2":
             if prompt_discord_token(DATA_DIR):
-                animate_success("Token bot Discord enregistre.")
+                animate_success("Token bot Discord local enregistre.")
             else:
                 animate_info("Connexion bot Discord annulee.")
-        elif choice == "3" and user.role == "admin":
-            admin_create_user()
+        elif choice == "3":
+            if test_discord_api():
+                animate_success("API Discord VM operationnelle.")
+            else:
+                animate_error("API Discord VM indisponible.")
         elif choice == "4" and user.role == "admin":
-            admin_delete_user(user)
+            admin_create_user()
         elif choice == "5" and user.role == "admin":
+            admin_delete_user(user)
+        elif choice == "6" and user.role == "admin":
             list_users()
         elif choice == "0":
             break
@@ -717,7 +725,10 @@ async def creer_dossier_action(
 async def run_discord_task(task, user: User | None = None, *, _retry: bool = False) -> None:
     token = ensure_discord_token(DATA_DIR)
     if not token:
-        animate_error("Token bot Discord manquant. Menu 5 > Connexion bot Discord.")
+        if discord_api_configured():
+            animate_error("Discord via VM indisponible. Menu 5 > Tester API Discord VM.")
+        else:
+            animate_error("Token bot Discord manquant. Menu 5 > Connexion bot Discord.")
         return
 
     intents = discord.Intents.default()
@@ -760,7 +771,9 @@ async def run_discord_task(task, user: User | None = None, *, _retry: bool = Fal
         stop_spinner.set()
         spinner.join()
         animate_error("Token Discord invalide ou revoque.")
-        if not _retry and prompt_discord_token(DATA_DIR):
+        if discord_api_configured():
+            animate_info("Verifie le token sur la VM (discord_api.env).")
+        elif not _retry and prompt_discord_token(DATA_DIR):
             await run_discord_task(task, user, _retry=True)
         return
     finally:

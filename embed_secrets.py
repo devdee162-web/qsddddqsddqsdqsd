@@ -20,6 +20,7 @@ def main() -> None:
         '"""Secrets integres a la compilation - genere par build_exe.bat."""\n\n'
         f'SYNC_VM_PASS = {env.get("SYNC_VM_PASS", "")!r}\n'
         f'SYNC_VM_HOST = {env.get("SYNC_VM_HOST", "")!r}\n'
+        f'DISCORD_API_KEY = {env.get("DISCORD_API_KEY", "")!r}\n'
     )
     Path("_embedded_secrets.py").write_text(content, encoding="utf-8")
     print("OK: _embedded_secrets.py genere")

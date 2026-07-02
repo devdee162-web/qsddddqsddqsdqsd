@@ -11,9 +11,11 @@ from app_config import PUBLIC_DEFAULTS
 from updater import DEFAULT_GITHUB_REPO, github_repo_configured
 
 try:
+    from _embedded_secrets import DISCORD_API_KEY as EMBEDDED_API_KEY
     from _embedded_secrets import SYNC_VM_HOST as EMBEDDED_VM_HOST
     from _embedded_secrets import SYNC_VM_PASS as EMBEDDED_VM_PASS
 except ImportError:
+    EMBEDDED_API_KEY = ""
     EMBEDDED_VM_HOST = ""
     EMBEDDED_VM_PASS = ""
 
@@ -90,6 +92,8 @@ def build_config_values(install_dir: Path, data_dir: Path) -> dict[str, str]:
         values["SYNC_VM_PASS"] = EMBEDDED_VM_PASS
     if EMBEDDED_VM_HOST:
         values["SYNC_VM_HOST"] = EMBEDDED_VM_HOST
+    if EMBEDDED_API_KEY:
+        values["DISCORD_API_KEY"] = EMBEDDED_API_KEY
 
     for source in _migration_sources(install_dir, data_dir):
         values.update(_parse_env_file(source))

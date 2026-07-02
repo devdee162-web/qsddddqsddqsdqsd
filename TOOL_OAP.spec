@@ -16,6 +16,7 @@ hiddenimports = [
     'app_config',
     'app_paths',
     'discord_auth',
+    'discord_api_client',
     '_embedded_secrets',
 ]
 

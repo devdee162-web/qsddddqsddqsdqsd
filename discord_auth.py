@@ -1,4 +1,4 @@
-"""Connexion bot Discord — token saisi localement (AppData), jamais dans le code."""
+"""Connexion bot Discord — local ou via API VM."""
 
 from __future__ import annotations
 
@@ -7,11 +7,18 @@ import os
 from pathlib import Path
 
 from app_paths import _parse_env_file, _write_env_file, config_path
+from discord_api_client import (
+    clear_discord_api_cache,
+    discord_api_configured,
+    fetch_discord_status,
+    fetch_discord_token,
+    resolve_discord_api_url,
+)
 
 PLACEHOLDER = "ton_token_bot_ici"
 
 
-def get_discord_token(data_dir: Path) -> str:
+def get_local_discord_token(data_dir: Path) -> str:
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if token and token != PLACEHOLDER:
         return token
@@ -24,6 +31,19 @@ def get_discord_token(data_dir: Path) -> str:
     return ""
 
 
+def get_discord_token(data_dir: Path, *, force_api: bool = False) -> str:
+    if discord_api_configured():
+        token = fetch_discord_token(force=force_api)
+        if token:
+            os.environ["DISCORD_TOKEN"] = token
+            return token
+
+    token = get_local_discord_token(data_dir)
+    if token:
+        return token
+    return ""
+
+
 def save_discord_token(data_dir: Path, token: str) -> None:
     cleaned = token.strip()
     cfg = config_path(data_dir)
@@ -31,6 +51,7 @@ def save_discord_token(data_dir: Path, token: str) -> None:
     values["DISCORD_TOKEN"] = cleaned
     _write_env_file(cfg, values)
     os.environ["DISCORD_TOKEN"] = cleaned
+    clear_discord_api_cache()
 
 
 def mask_token(token: str) -> str:
@@ -40,25 +61,38 @@ def mask_token(token: str) -> str:
 
 
 def discord_token_status(data_dir: Path) -> str:
-    token = get_discord_token(data_dir)
+    if discord_api_configured():
+        status = fetch_discord_status()
+        if status and status.get("configured") and status.get("bot_username"):
+            return f"VM connecte ({status['bot_username']})"
+        if status and status.get("configured"):
+            return "VM connecte"
+        api_url = resolve_discord_api_url()
+        if api_url:
+            return "VM indisponible"
+        return "API VM non configuree"
+
+    token = get_local_discord_token(data_dir)
     if not token:
         return "non configure"
-    return f"configure ({mask_token(token)})"
+    return f"local ({mask_token(token)})"
 
 
 def _print_discord_help() -> None:
     print()
-    print("=== CONNEXION BOT DISCORD ===")
+    print("=== CONNEXION BOT DISCORD (LOCAL) ===")
     print()
-    print("Discord n'autorise pas la connexion e-mail/mot de passe pour un bot.")
-    print("Colle ici le TOKEN BOT (Developer Portal > ton application > Bot > Reset Token).")
+    if discord_api_configured():
+        print(f"API VM detectee: {resolve_discord_api_url()}")
+        print("Le token peut etre gere sur la VM (discord_api_server.py).")
+        print("Cette saisie sert de secours si l'API VM est indisponible.")
+        print()
+    print("Colle le TOKEN BOT (Developer Portal > ton application > Bot > Reset Token).")
     print()
     print("1. https://discord.com/developers/applications")
     print("2. Ouvre ton application bot")
     print("3. Bot > Reset Token > copie le token")
-    print("4. Colle-le ci-dessous (saisie masquee, comme un mot de passe)")
-    print()
-    print("Le token est enregistre uniquement sur ce PC (AppData), pas sur GitHub.")
+    print("4. Colle-le ci-dessous (saisie masquee)")
     print()
 
 
@@ -72,7 +106,35 @@ def prompt_discord_token(data_dir: Path) -> bool:
         print("Token invalide.")
         return False
     save_discord_token(data_dir, token)
-    print(f"Token enregistre ({mask_token(token)}).")
+    print(f"Token local enregistre ({mask_token(token)}).")
+    return True
+
+
+def test_discord_api() -> bool:
+    if not discord_api_configured():
+        print("API VM non configuree (SYNC_VM_HOST ou DISCORD_API_URL).")
+        return False
+
+    print(f"Test API: {resolve_discord_api_url()}")
+    status = fetch_discord_status(force=True)
+    if not status:
+        print("Echec: API VM injoignable.")
+        return False
+
+    if status.get("bot_username"):
+        print(f"OK: bot Discord '{status['bot_username']}' via VM.")
+    elif status.get("configured"):
+        print("OK: token present sur la VM (verification bot en attente).")
+    else:
+        print("Echec: token Discord manquant sur la VM.")
+        return False
+
+    token = fetch_discord_token(force=True)
+    if not token:
+        print("Echec: impossible de recuperer le token (verifie DISCORD_API_KEY).")
+        return False
+
+    print("OK: token recupere depuis la VM.")
     return True
 
 
@@ -82,6 +144,14 @@ def ensure_discord_token(data_dir: Path, *, interactive: bool = True) -> str | N
         return token
     if not interactive:
         return None
+
+    if discord_api_configured():
+        print("API VM configuree mais Discord indisponible.")
+        test_discord_api()
+        token = get_discord_token(data_dir, force_api=True)
+        if token:
+            return token
+
     print("Connexion bot Discord requise pour cette action.")
     if prompt_discord_token(data_dir):
         return get_discord_token(data_dir)

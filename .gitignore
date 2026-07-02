@@ -1,5 +1,6 @@
 # Secrets et config locale
 .env
+discord_api.env
 dist/.env
 *.old
 
