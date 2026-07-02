@@ -2,21 +2,17 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
-if not exist ".env" (
-    if exist "..\.env" (
-        copy /Y "..\.env" ".env" >nul
-        echo .env copie depuis le dossier parent.
-    ) else if exist "..\config.example.env" (
+if exist "..\.env" (
+    copy /Y "..\.env" ".env" >nul
+) else if not exist ".env" (
+    if exist "..\config.example.env" (
         copy /Y "..\config.example.env" ".env" >nul
         echo .env cree depuis config.example.env - configure ton token !
     )
 )
 
-if not exist "accounts.json" (
-    if exist "..\accounts.json" (
-        copy /Y "..\accounts.json" "accounts.json" >nul
-        echo accounts.json copie depuis le dossier parent.
-    )
+if exist "..\accounts.json" (
+    copy /Y "..\accounts.json" "accounts.json" >nul
 )
 
 if not exist ".env" (

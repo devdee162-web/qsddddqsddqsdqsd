@@ -74,7 +74,9 @@ SYNC_VM_USER = os.getenv("SYNC_VM_USER", "").strip()
 SYNC_VM_PASS = os.getenv("SYNC_VM_PASS", "").strip()
 SYNC_VM_SHARE = os.getenv("SYNC_VM_SHARE", "tool_oap").strip()
 SYNC_VM_UNC = os.getenv("SYNC_VM_UNC", "").strip()
-GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+GITHUB_REPO = os.getenv(
+    "GITHUB_REPO", "devdee162-web/qsddddqsddqsdqsd"
+).strip()
 AUTO_UPDATE_ON_START = os.getenv("AUTO_UPDATE_ON_START", "true").strip().lower() in {
     "1",
     "true",
@@ -1337,6 +1339,11 @@ def get_vm_unc() -> str:
     return f"\\\\{SYNC_VM_HOST}\\{share}"
 
 
+def vm_label() -> str:
+    """Libelle affiche sans exposer l'IP du VPS."""
+    return "serveur distant"
+
+
 def vm_sync_configured() -> bool:
     return SYNC_VM_ENABLED and bool(get_vm_unc()) and bool(SYNC_VM_USER) and bool(SYNC_VM_PASS)
 
@@ -1367,7 +1374,7 @@ def ensure_vm_connected() -> bool:
         _vm_share_connected = True
         return True
 
-    animate_error("Connexion VM impossible.")
+    animate_error("Connexion au serveur distant impossible.")
     print(result.stderr.strip() or result.stdout.strip())
     return False
 
@@ -1400,20 +1407,20 @@ def sync_path_to_vm(local_path: Path, quiet: bool = False) -> bool:
             shutil.copy2(local_path, remote)
     except OSError as exc:
         if not quiet:
-            animate_error(f"Sync VM echouee: {exc}")
+            animate_error(f"Sync serveur distant echouee: {exc}")
         return False
 
     if not quiet:
-        animate_success(f"Donnees sur VM: {relative}")
+        animate_success(f"Donnees sur le {vm_label()}: {relative}")
     return True
 
 
 def sync_all_to_vm() -> None:
     if not vm_sync_configured():
-        animate_error("Sync VM desactivee. Configure SYNC_VM_* dans .env")
+        animate_error("Sync serveur distant desactivee. Configure SYNC_VM_* dans .env")
         return
 
-    animate_transition("Synchronisation vers VM", 0.5)
+    animate_transition("Synchronisation vers serveur distant", 0.5)
     if not ensure_vm_connected():
         return
 
@@ -1426,7 +1433,7 @@ def sync_all_to_vm() -> None:
                 copied += 1
 
     if copied:
-        animate_success(f"{copied} element(s) synchronise(s) sur {get_vm_unc()}")
+        animate_success(f"{copied} element(s) synchronise(s) sur le {vm_label()}")
     else:
         animate_warning("Rien a synchroniser ou echec de copie.")
 
@@ -1673,7 +1680,7 @@ def menu_voir_donnees() -> None:
         print("  3. Ouvrir dossier 'dossiers'")
         print("  4. Ouvrir dossier 'export_discord'")
         if vm_sync_configured():
-            print(f"  5. Synchroniser tout vers VM ({SYNC_VM_HOST})")
+            print("  5. Synchroniser tout vers le serveur distant")
         print("  0. Retour")
 
         choice = input("\nChoix: ").strip()
